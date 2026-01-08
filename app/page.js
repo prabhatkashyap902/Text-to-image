@@ -4,7 +4,7 @@ import { useState, useRef } from "react";
 
 export default function Home() {
   const [prompts, setPrompts] = useState("");
-  const [images, setImages] = useState([]);
+  const [images, setImages] = useState([]); // Array of {prompt, url, id, index, loading, success, failed}
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -13,6 +13,7 @@ export default function Home() {
   const [batchSize, setBatchSize] = useState(50);
   const abortControllerRef = useRef(null);
   const shouldStopRef = useRef(false);
+  const imagesRef = useRef([]); // Ref to track images during generation
 
   const aspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4"];
   const providers = ["1.5-Fast", "1.5-Pro"];
@@ -22,7 +23,13 @@ export default function Home() {
     return String(num).padStart(totalDigits, "0");
   };
 
-  // Generate a single image
+  // Check if all images are loaded (no loading state and at least one image)
+  const allImagesLoaded = images.length > 0 && images.every(img => !img.loading);
+  
+  // Count of successfully loaded images
+  const loadedImagesCount = images.filter(img => !img.loading && img.success).length;
+
+  // Generate a single image and update state
   const generateSingleImage = async (prompt, index, signal) => {
     try {
       const response = await fetch("/api/generate", {
@@ -45,15 +52,17 @@ export default function Home() {
           url: data.image_urls[0],
           id: Date.now() + index,
           index: index + 1,
+          loading: false,
           success: true,
+          failed: false,
         };
       }
-      return { prompt, index: index + 1, success: false };
+      return { prompt, index: index + 1, loading: false, success: false, failed: true };
     } catch (error) {
       if (error.name !== "AbortError") {
         console.error(`Error generating image for prompt: ${prompt}`, error);
       }
-      return { prompt, index: index + 1, success: false };
+      return { prompt, index: index + 1, loading: false, success: false, failed: true };
     }
   };
 
@@ -69,12 +78,23 @@ export default function Home() {
     }
 
     setLoading(true);
-    setImages([]);
     setProgress({ current: 0, total: promptList.length });
     abortControllerRef.current = new AbortController();
     shouldStopRef.current = false;
 
-    const allResults = [];
+    // Initialize all image slots with loading state
+    const initialImages = promptList.map((prompt, index) => ({
+      prompt,
+      url: null,
+      id: Date.now() + index,
+      index: index + 1,
+      loading: true,
+      success: false,
+      failed: false,
+    }));
+    
+    setImages(initialImages);
+    imagesRef.current = [...initialImages];
 
     // Process in batches of batchSize
     for (let batchStart = 0; batchStart < promptList.length; batchStart += batchSize) {
@@ -92,13 +112,15 @@ export default function Home() {
       // Wait for all promises in this batch to complete
       const batchResults = await Promise.all(batchPromises);
 
-      // Filter successful results and add to allResults
-      const successfulResults = batchResults.filter((r) => r.success);
-      allResults.push(...successfulResults);
+      // Update the images array with the results
+      batchResults.forEach((result) => {
+        const idx = result.index - 1; // Convert to 0-indexed
+        imagesRef.current[idx] = result;
+      });
 
-      // Update progress and images
+      // Update progress and images state
       setProgress({ current: batchEnd, total: promptList.length });
-      setImages([...allResults]);
+      setImages([...imagesRef.current]);
     }
 
     setLoading(false);
@@ -130,7 +152,9 @@ export default function Home() {
   };
 
   const downloadAllAsZip = async () => {
-    if (images.length === 0) return;
+    // Only download successful images
+    const successfulImages = images.filter(img => img.success && img.url);
+    if (successfulImages.length === 0) return;
 
     setDownloading(true);
     try {
@@ -142,13 +166,13 @@ export default function Home() {
 
       // Download images in parallel batches to speed up
       const downloadBatchSize = 10;
-      for (let i = 0; i < images.length; i += downloadBatchSize) {
-        const batch = images.slice(i, i + downloadBatchSize);
-        const batchPromises = batch.map(async (img, batchIndex) => {
+      for (let i = 0; i < successfulImages.length; i += downloadBatchSize) {
+        const batch = successfulImages.slice(i, i + downloadBatchSize);
+        const batchPromises = batch.map(async (img) => {
           const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
           const response = await fetch(proxyUrl);
           const blob = await response.blob();
-          return { index: i + batchIndex + 1, blob };
+          return { index: img.index, blob };
         });
 
         const results = await Promise.all(batchPromises);
@@ -300,30 +324,40 @@ export default function Home() {
               <h2 className="text-2xl font-bold text-white flex items-center gap-2">
                 <span>🖼️</span> Generated Images
                 <span className="text-sm font-normal text-slate-400">
-                  ({images.length} images)
+                  ({loadedImagesCount} / {images.length} ready)
                 </span>
               </h2>
-              {images.length > 0 && (
-                <button
-                  onClick={downloadAllAsZip}
-                  disabled={downloading}
-                  className="px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-600 disabled:to-slate-600 text-white font-semibold rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-cyan-500/25 flex items-center gap-2"
-                >
-                  {downloading ? (
-                    <>
-                      <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Creating ZIP...
-                    </>
-                  ) : (
-                    <>
-                      📦 Download All as ZIP
-                    </>
-                  )}
-                </button>
-              )}
+              <button
+                onClick={downloadAllAsZip}
+                disabled={downloading || !allImagesLoaded}
+                className={`px-6 py-3 ${
+                  allImagesLoaded 
+                    ? 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 shadow-lg shadow-cyan-500/25' 
+                    : 'bg-slate-600 cursor-not-allowed'
+                } text-white font-semibold rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] flex items-center gap-2 disabled:transform-none disabled:opacity-75`}
+              >
+                {downloading ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Creating ZIP...
+                  </>
+                ) : !allImagesLoaded ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Waiting for all images...
+                  </>
+                ) : (
+                  <>
+                    📦 Download All as ZIP
+                  </>
+                )}
+              </button>
             </div>
 
             {/* Scrollable Gallery Container */}
@@ -332,21 +366,43 @@ export default function Home() {
                 {images.map((image) => (
                   <div
                     key={image.id}
-                    className="relative overflow-hidden rounded-2xl bg-white/5 border border-white/10 transition-all hover:border-purple-500/50 hover:shadow-xl hover:shadow-purple-500/10"
+                    className={`relative overflow-hidden rounded-2xl bg-white/5 border ${
+                      image.failed 
+                        ? 'border-red-500/50' 
+                        : image.loading 
+                          ? 'border-purple-500/30' 
+                          : 'border-white/10 hover:border-purple-500/50'
+                    } transition-all hover:shadow-xl hover:shadow-purple-500/10`}
                   >
                     {/* Image Number Badge */}
-                    <div className="absolute top-3 left-3 z-10 px-3 py-1 bg-black/60 backdrop-blur-sm rounded-full text-sm font-medium text-white">
+                    <div className={`absolute top-3 left-3 z-10 px-3 py-1 backdrop-blur-sm rounded-full text-sm font-medium text-white ${
+                      image.loading ? 'bg-purple-500/60' : image.failed ? 'bg-red-500/60' : 'bg-black/60'
+                    }`}>
                       #{formatNumber(image.index)}
                     </div>
 
-                    {/* Image */}
-                    <div className="aspect-video relative overflow-hidden">
-                      <img
-                        src={image.url}
-                        alt={image.prompt}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
+                    {/* Image or Loading State */}
+                    <div className="aspect-video relative overflow-hidden bg-slate-800/50">
+                      {image.loading ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                          <div className="relative">
+                            <div className="w-12 h-12 border-4 border-purple-500/20 border-t-purple-500 rounded-full animate-spin"></div>
+                          </div>
+                          <span className="text-sm text-slate-400">Generating...</span>
+                        </div>
+                      ) : image.failed ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                          <span className="text-4xl">❌</span>
+                          <span className="text-sm text-red-400">Generation failed</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={image.url}
+                          alt={image.prompt}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      )}
                     </div>
 
                     {/* Info & Download Section */}
@@ -354,27 +410,41 @@ export default function Home() {
                       <p className="text-sm text-slate-400 line-clamp-2 mb-3">
                         {image.prompt}
                       </p>
-                      {/* Always Visible Download Button */}
-                      <button
-                        onClick={() => downloadImage(image.url, image.index)}
-                        className="w-full px-4 py-2.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-5 w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
+                      {/* Download Button - only show when image is ready */}
+                      {image.success && image.url ? (
+                        <button
+                          onClick={() => downloadImage(image.url, image.index)}
+                          className="w-full px-4 py-2.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-medium rounded-lg transition-all flex items-center justify-center gap-2"
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                          />
-                        </svg>
-                        Download image{formatNumber(image.index)}.png
-                      </button>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-5 w-5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                            />
+                          </svg>
+                          Download image{formatNumber(image.index)}.png
+                        </button>
+                      ) : image.loading ? (
+                        <div className="w-full px-4 py-2.5 bg-slate-600/50 text-slate-400 font-medium rounded-lg flex items-center justify-center gap-2">
+                          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Loading...
+                        </div>
+                      ) : (
+                        <div className="w-full px-4 py-2.5 bg-red-600/30 text-red-400 font-medium rounded-lg flex items-center justify-center gap-2">
+                          ❌ Failed
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}

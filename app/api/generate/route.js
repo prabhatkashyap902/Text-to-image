@@ -26,8 +26,13 @@ export async function POST(request) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('API Error:', errorText);
-      return Response.json({ error: 'Failed to generate image' }, { status: response.status });
+      console.error('API Error Status:', response.status);
+      console.error('API Error Headers:', JSON.stringify(Object.fromEntries(response.headers.entries())));
+      console.error('API Error Body:', errorText);
+      return Response.json({ 
+        error: 'Failed to generate image',
+        details: `Status: ${response.status}, Body: ${errorText.substring(0, 200)}`
+      }, { status: response.status });
     }
 
     const data = await response.json();
