@@ -174,8 +174,8 @@ export default function Home() {
   };
 
   const downloadAllAsZip = async () => {
-    // Only download successful images
-    const successfulImages = images.filter(img => img.success && img.url);
+    // Only download successful images with valid URLs
+    const successfulImages = images.filter(img => img.success && img.url && img.url.startsWith('http'));
     if (successfulImages.length === 0) {
       alert("No images to download!");
       return;
@@ -194,41 +194,45 @@ export default function Home() {
       let downloadedCount = 0;
       let failedCount = 0;
 
-      // Download ONE image at a time - simple and reliable
+      // Download ONE image at a time with 10 second timeout
       for (const img of successfulImages) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
         try {
           const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-          const response = await fetch(proxyUrl);
+          const response = await fetch(proxyUrl, { signal: controller.signal });
+          clearTimeout(timeoutId);
           
           if (response.ok) {
             const blob = await response.blob();
-            folder.file(`image${formatNumber(img.index)}.png`, blob);
-            downloadedCount++;
+            if (blob.size > 0) {
+              folder.file(`image${formatNumber(img.index)}.png`, blob);
+              downloadedCount++;
+            } else {
+              console.log(`Skipping image ${img.index} - empty blob`);
+              failedCount++;
+            }
           } else {
-            console.error(`Failed to download image ${img.index}: ${response.status}`);
+            console.log(`Skipping image ${img.index} - status ${response.status}`);
             failedCount++;
           }
         } catch (error) {
-          console.error(`Error downloading image ${img.index}:`, error);
+          clearTimeout(timeoutId);
+          console.log(`Skipping image ${img.index} - ${error.name === 'AbortError' ? 'timeout' : error.message}`);
           failedCount++;
         }
         
         setDownloadProgress({ current: downloadedCount + failedCount, total: successfulImages.length });
       }
 
-      if (downloadedCount === 0) {
-        alert("Failed to download any images!");
-        setDownloading(false);
-        setDownloadProgress({ current: 0, total: 0 });
-        return;
-      }
-
+      // Always create ZIP with whatever we got
       setDownloadProgress({ current: successfulImages.length, total: successfulImages.length });
       const content = await zip.generateAsync({ type: "blob" });
       saveAs(content, `generated_images${failedCount > 0 ? `_${downloadedCount}_of_${successfulImages.length}` : ''}.zip`);
       
       if (failedCount > 0) {
-        alert(`Downloaded ${downloadedCount} images. ${failedCount} failed.`);
+        alert(`Downloaded ${downloadedCount} images. Skipped ${failedCount}.`);
       }
     } catch (error) {
       console.error("Zip download failed:", error);
