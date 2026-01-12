@@ -132,11 +132,11 @@ export default function Home() {
     setLoading(false);
   };
 
-  // Download via proxy to avoid CORS
+  // Download using cached image from browser - no API call needed!
   const downloadImage = async (url, index) => {
     try {
-      const proxyUrl = `/api/download?url=${encodeURIComponent(url)}`;
-      const response = await fetch(proxyUrl);
+      // Try to fetch directly (should use browser cache)
+      const response = await fetch(url, { mode: 'cors' });
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -147,7 +147,23 @@ export default function Home() {
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
     } catch (error) {
-      console.error("Download failed:", error);
+      // Fallback to proxy if CORS fails
+      console.log("Direct fetch failed, using proxy...", error);
+      try {
+        const proxyUrl = `/api/download?url=${encodeURIComponent(url)}`;
+        const response = await fetch(proxyUrl);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = `image${formatNumber(index)}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+      } catch (proxyError) {
+        console.error("Download failed:", proxyError);
+      }
     }
   };
 
@@ -164,15 +180,23 @@ export default function Home() {
       const zip = new JSZip();
       const folder = zip.folder("generated_images");
 
-      // Download images in parallel batches to speed up
-      const downloadBatchSize = 10;
+      // Download ALL images in parallel - they're already cached in browser!
+      const downloadBatchSize = 50; // Much larger batch since we're using cache
       for (let i = 0; i < successfulImages.length; i += downloadBatchSize) {
         const batch = successfulImages.slice(i, i + downloadBatchSize);
         const batchPromises = batch.map(async (img) => {
-          const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-          const response = await fetch(proxyUrl);
-          const blob = await response.blob();
-          return { index: img.index, blob };
+          try {
+            // Try direct fetch first (uses browser cache)
+            const response = await fetch(img.url, { mode: 'cors' });
+            const blob = await response.blob();
+            return { index: img.index, blob };
+          } catch (error) {
+            // Fallback to proxy if CORS fails
+            const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
+            const response = await fetch(proxyUrl);
+            const blob = await response.blob();
+            return { index: img.index, blob };
+          }
         });
 
         const results = await Promise.all(batchPromises);
@@ -254,7 +278,7 @@ export default function Home() {
                 onChange={(e) => setBatchSize(Number(e.target.value))}
                 className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
               >
-                {[10, 25, 50, 100].map((size) => (
+                {[10, 25, 50, 100, 200, 400].map((size) => (
                   <option key={size} value={size} className="bg-slate-800">
                     {size} at a time
                   </option>
