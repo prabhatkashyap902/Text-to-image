@@ -7,6 +7,7 @@ export default function Home() {
   const [images, setImages] = useState([]); // Array of {prompt, url, id, index, loading, success, failed}
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [provider, setProvider] = useState("1.5-Fast");
@@ -166,6 +167,24 @@ export default function Home() {
       }
     }
   };
+  // Helper: Convert an already-loaded img element to blob using canvas (NO network request!)
+  const imgToBlob = (imgElement) => {
+    return new Promise((resolve) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = imgElement.naturalWidth || imgElement.width;
+        canvas.height = imgElement.naturalHeight || imgElement.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(imgElement, 0, 0);
+        canvas.toBlob((blob) => {
+          resolve(blob);
+        }, 'image/png');
+      } catch (error) {
+        console.log('Canvas extraction failed:', error);
+        resolve(null);
+      }
+    });
+  };
 
   const downloadAllAsZip = async () => {
     // Only download successful images
@@ -173,6 +192,8 @@ export default function Home() {
     if (successfulImages.length === 0) return;
 
     setDownloading(true);
+    setDownloadProgress({ current: 0, total: successfulImages.length });
+    
     try {
       const JSZip = (await import("jszip")).default;
       const { saveAs } = await import("file-saver");
@@ -180,37 +201,60 @@ export default function Home() {
       const zip = new JSZip();
       const folder = zip.folder("generated_images");
 
-      // Download ALL images in parallel - they're already cached in browser!
-      const downloadBatchSize = 50; // Much larger batch since we're using cache
-      for (let i = 0; i < successfulImages.length; i += downloadBatchSize) {
-        const batch = successfulImages.slice(i, i + downloadBatchSize);
-        const batchPromises = batch.map(async (img) => {
-          try {
-            // Try direct fetch first (uses browser cache)
-            const response = await fetch(img.url, { mode: 'cors' });
-            const blob = await response.blob();
-            return { index: img.index, blob };
-          } catch (error) {
-            // Fallback to proxy if CORS fails
-            const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-            const response = await fetch(proxyUrl);
-            const blob = await response.blob();
-            return { index: img.index, blob };
+      let downloadedCount = 0;
+      let skippedCount = 0;
+
+      // Get all image elements from the DOM
+      const imgElements = document.querySelectorAll('img[data-image-index]');
+      const imgMap = new Map();
+      imgElements.forEach(img => {
+        const index = parseInt(img.getAttribute('data-image-index'));
+        if (!isNaN(index)) {
+          imgMap.set(index, img);
+        }
+      });
+
+      // Process ALL images in parallel - directly from DOM, no network!
+      const batchPromises = successfulImages.map(async (img) => {
+        const imgElement = imgMap.get(img.index);
+        
+        if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
+          // Extract directly from canvas - INSTANT!
+          const blob = await imgToBlob(imgElement);
+          if (blob) {
+            downloadedCount++;
+            setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
+            return { index: img.index, blob, success: true };
           }
-        });
+        }
+        
+        // Fallback: if DOM extraction fails, skip it (don't fetch)
+        console.log(`Skipping image ${img.index} - not in DOM or extraction failed`);
+        skippedCount++;
+        setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
+        return { index: img.index, blob: null, success: false };
+      });
 
-        const results = await Promise.all(batchPromises);
-        results.forEach(({ index, blob }) => {
-          folder.file(`image${formatNumber(index)}.png`, blob);
-        });
-      }
+      // All parallel - no network, all from memory!
+      const results = await Promise.allSettled(batchPromises);
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.success && result.value.blob) {
+          folder.file(`image${formatNumber(result.value.index)}.png`, result.value.blob);
+        }
+      });
 
+      setDownloadProgress({ current: successfulImages.length, total: successfulImages.length });
       const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, "generated_images.zip");
+      saveAs(content, `generated_images${skippedCount > 0 ? `_${downloadedCount}_of_${successfulImages.length}` : ''}.zip`);
+      
+      if (skippedCount > 0) {
+        console.log(`ZIP created with ${downloadedCount} images. Skipped ${skippedCount} (not visible in DOM).`);
+      }
     } catch (error) {
       console.error("Zip download failed:", error);
     }
     setDownloading(false);
+    setDownloadProgress({ current: 0, total: 0 });
   };
 
   return (
@@ -366,7 +410,9 @@ export default function Home() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
-                    Creating ZIP...
+                    {downloadProgress.current === downloadProgress.total 
+                      ? 'Creating ZIP...' 
+                      : `Downloading ${downloadProgress.current}/${downloadProgress.total}...`}
                   </>
                 ) : !allImagesLoaded ? (
                   <>
