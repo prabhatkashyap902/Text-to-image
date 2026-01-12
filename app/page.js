@@ -189,50 +189,88 @@ export default function Home() {
       const folder = zip.folder("generated_images");
 
       let downloadedCount = 0;
-      let skippedCount = 0;
+      const downloadedImages = new Map(); // Store downloaded blobs
+      const failedImages = []; // Track failed for retry
 
-      // Fetch with 5 second timeout
-      const fetchWithTimeout = (url, timeout = 5000) => {
-        return Promise.race([
-          fetch(url).then(r => r.blob()),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
-        ]);
-      };
-
-      // Process ALL images in parallel via proxy
-      const batchPromises = successfulImages.map(async (img) => {
+      // Download a single image via proxy (no timeout - wait for it!)
+      const downloadSingleImage = async (img) => {
         try {
           const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-          const blob = await fetchWithTimeout(proxyUrl, 5000);
-          downloadedCount++;
-          setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
+          const response = await fetch(proxyUrl);
+          if (!response.ok) throw new Error('Failed');
+          const blob = await response.blob();
           return { index: img.index, blob, success: true };
         } catch (error) {
-          // Skip on error/timeout - don't wait!
-          console.log(`Skipping image ${img.index} - ${error.message}`);
-          skippedCount++;
-          setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
           return { index: img.index, blob: null, success: false };
         }
-      });
+      };
 
-      // All parallel with Promise.allSettled
-      const results = await Promise.allSettled(batchPromises);
-      results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value.success && result.value.blob) {
-          folder.file(`image${formatNumber(result.value.index)}.png`, result.value.blob);
+      // Process in batches of 20 to not overwhelm the server
+      const batchSize = 20;
+      for (let i = 0; i < successfulImages.length; i += batchSize) {
+        const batch = successfulImages.slice(i, i + batchSize);
+        
+        const batchPromises = batch.map(async (img) => {
+          const result = await downloadSingleImage(img);
+          if (result.success) {
+            downloadedCount++;
+            downloadedImages.set(result.index, result.blob);
+          } else {
+            failedImages.push(img);
+          }
+          setDownloadProgress({ current: downloadedCount + failedImages.length, total: successfulImages.length });
+          return result;
+        });
+
+        await Promise.all(batchPromises);
+      }
+
+      // Retry failed images up to 3 times
+      let retryAttempts = 0;
+      while (failedImages.length > 0 && retryAttempts < 3) {
+        retryAttempts++;
+        console.log(`Retry attempt ${retryAttempts} for ${failedImages.length} failed images...`);
+        
+        const toRetry = [...failedImages];
+        failedImages.length = 0; // Clear for this attempt
+        
+        for (let i = 0; i < toRetry.length; i += batchSize) {
+          const batch = toRetry.slice(i, i + batchSize);
+          
+          const batchPromises = batch.map(async (img) => {
+            const result = await downloadSingleImage(img);
+            if (result.success) {
+              downloadedCount++;
+              downloadedImages.set(result.index, result.blob);
+            } else {
+              failedImages.push(img);
+            }
+            setDownloadProgress({ current: downloadedCount, total: successfulImages.length });
+            return result;
+          });
+
+          await Promise.all(batchPromises);
         }
+      }
+
+      // Add all downloaded images to ZIP
+      downloadedImages.forEach((blob, index) => {
+        folder.file(`image${formatNumber(index)}.png`, blob);
       });
 
       setDownloadProgress({ current: successfulImages.length, total: successfulImages.length });
       const content = await zip.generateAsync({ type: "blob" });
-      saveAs(content, `generated_images${skippedCount > 0 ? `_${downloadedCount}_of_${successfulImages.length}` : ''}.zip`);
+      
+      const finalCount = downloadedImages.size;
+      const skippedCount = successfulImages.length - finalCount;
+      saveAs(content, `generated_images${skippedCount > 0 ? `_${finalCount}_of_${successfulImages.length}` : ''}.zip`);
       
       if (skippedCount > 0) {
-        console.log(`ZIP created with ${downloadedCount} images. Skipped ${skippedCount} failed.`);
+        alert(`Downloaded ${finalCount} images. ${skippedCount} failed after 3 retries.`);
       }
     } catch (error) {
       console.error("Zip download failed:", error);
+      alert("ZIP download failed: " + error.message);
     }
     setDownloading(false);
     setDownloadProgress({ current: 0, total: 0 });
