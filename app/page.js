@@ -97,6 +97,9 @@ export default function Home() {
     setImages(initialImages);
     imagesRef.current = [...initialImages];
 
+    // Counter for completed images
+    let completedCount = 0;
+
     // Process in batches of batchSize
     for (let batchStart = 0; batchStart < promptList.length; batchStart += batchSize) {
       if (shouldStopRef.current) break;
@@ -105,23 +108,25 @@ export default function Home() {
       const batchPrompts = promptList.slice(batchStart, batchEnd);
 
       // Create promises for all prompts in this batch (parallel)
-      const batchPromises = batchPrompts.map((prompt, batchIndex) => {
+      // Each promise updates progress immediately when it completes
+      const batchPromises = batchPrompts.map(async (prompt, batchIndex) => {
         const globalIndex = batchStart + batchIndex;
-        return generateSingleImage(prompt, globalIndex, abortControllerRef.current?.signal);
+        const result = await generateSingleImage(prompt, globalIndex, abortControllerRef.current?.signal);
+        
+        // Update immediately when this individual image completes
+        const idx = result.index - 1;
+        imagesRef.current[idx] = result;
+        completedCount++;
+        
+        // Update progress and UI in real-time for each image!
+        setProgress({ current: completedCount, total: promptList.length });
+        setImages([...imagesRef.current]);
+        
+        return result;
       });
 
       // Wait for all promises in this batch to complete
-      const batchResults = await Promise.all(batchPromises);
-
-      // Update the images array with the results
-      batchResults.forEach((result) => {
-        const idx = result.index - 1; // Convert to 0-indexed
-        imagesRef.current[idx] = result;
-      });
-
-      // Update progress and images state
-      setProgress({ current: batchEnd, total: promptList.length });
-      setImages([...imagesRef.current]);
+      await Promise.all(batchPromises);
     }
 
     setLoading(false);
