@@ -172,24 +172,6 @@ export default function Home() {
       }
     }
   };
-  // Helper: Convert an already-loaded img element to blob using canvas (NO network request!)
-  const imgToBlob = (imgElement) => {
-    return new Promise((resolve) => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = imgElement.naturalWidth || imgElement.width;
-        canvas.height = imgElement.naturalHeight || imgElement.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(imgElement, 0, 0);
-        canvas.toBlob((blob) => {
-          resolve(blob);
-        }, 'image/png');
-      } catch (error) {
-        console.log('Canvas extraction failed:', error);
-        resolve(null);
-      }
-    });
-  };
 
   const downloadAllAsZip = async () => {
     // Only download successful images
@@ -209,38 +191,32 @@ export default function Home() {
       let downloadedCount = 0;
       let skippedCount = 0;
 
-      // Get all image elements from the DOM
-      const imgElements = document.querySelectorAll('img[data-image-index]');
-      const imgMap = new Map();
-      imgElements.forEach(img => {
-        const index = parseInt(img.getAttribute('data-image-index'));
-        if (!isNaN(index)) {
-          imgMap.set(index, img);
-        }
-      });
+      // Fetch with 5 second timeout
+      const fetchWithTimeout = (url, timeout = 5000) => {
+        return Promise.race([
+          fetch(url).then(r => r.blob()),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
+        ]);
+      };
 
-      // Process ALL images in parallel - directly from DOM, no network!
+      // Process ALL images in parallel via proxy
       const batchPromises = successfulImages.map(async (img) => {
-        const imgElement = imgMap.get(img.index);
-        
-        if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
-          // Extract directly from canvas - INSTANT!
-          const blob = await imgToBlob(imgElement);
-          if (blob) {
-            downloadedCount++;
-            setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
-            return { index: img.index, blob, success: true };
-          }
+        try {
+          const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
+          const blob = await fetchWithTimeout(proxyUrl, 5000);
+          downloadedCount++;
+          setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
+          return { index: img.index, blob, success: true };
+        } catch (error) {
+          // Skip on error/timeout - don't wait!
+          console.log(`Skipping image ${img.index} - ${error.message}`);
+          skippedCount++;
+          setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
+          return { index: img.index, blob: null, success: false };
         }
-        
-        // Fallback: if DOM extraction fails, skip it (don't fetch)
-        console.log(`Skipping image ${img.index} - not in DOM or extraction failed`);
-        skippedCount++;
-        setDownloadProgress({ current: downloadedCount + skippedCount, total: successfulImages.length });
-        return { index: img.index, blob: null, success: false };
       });
 
-      // All parallel - no network, all from memory!
+      // All parallel with Promise.allSettled
       const results = await Promise.allSettled(batchPromises);
       results.forEach((result) => {
         if (result.status === 'fulfilled' && result.value.success && result.value.blob) {
@@ -253,7 +229,7 @@ export default function Home() {
       saveAs(content, `generated_images${skippedCount > 0 ? `_${downloadedCount}_of_${successfulImages.length}` : ''}.zip`);
       
       if (skippedCount > 0) {
-        console.log(`ZIP created with ${downloadedCount} images. Skipped ${skippedCount} (not visible in DOM).`);
+        console.log(`ZIP created with ${downloadedCount} images. Skipped ${skippedCount} failed.`);
       }
     } catch (error) {
       console.error("Zip download failed:", error);
