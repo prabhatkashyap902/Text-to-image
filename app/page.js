@@ -452,8 +452,6 @@ export default function Home() {
                           alt={image.prompt}
                           className="w-full h-full object-cover"
                           loading="lazy"
-                          crossOrigin="anonymous"
-                          data-image-index={image.index}
                         />
                       )}
                     </div>
