@@ -31,7 +31,7 @@ export default function Home() {
   const loadedImagesCount = images.filter(img => !img.loading && img.success).length;
 
   // Generate a single image and update state
-  const generateSingleImage = async (prompt, index, signal) => {
+  const generateSingleImage = async (prompt, index, id, signal) => {
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
@@ -51,19 +51,19 @@ export default function Home() {
         return {
           prompt: data.prompt,
           url: data.image_urls[0],
-          id: Date.now() + index,
+          id: id,
           index: index + 1,
           loading: false,
           success: true,
           failed: false,
         };
       }
-      return { prompt, index: index + 1, loading: false, success: false, failed: true };
+      return { prompt, index: index + 1, id, loading: false, success: false, failed: true };
     } catch (error) {
       if (error.name !== "AbortError") {
         console.error(`Error generating image for prompt: ${prompt}`, error);
       }
-      return { prompt, index: index + 1, loading: false, success: false, failed: true };
+      return { prompt, index: index + 1, id, loading: false, success: false, failed: true };
     }
   };
 
@@ -87,7 +87,7 @@ export default function Home() {
     const initialImages = promptList.map((prompt, index) => ({
       prompt,
       url: null,
-      id: Date.now() + index,
+      id: crypto.randomUUID(),
       index: index + 1,
       loading: true,
       success: false,
@@ -111,7 +111,9 @@ export default function Home() {
       // Each promise updates progress immediately when it completes
       const batchPromises = batchPrompts.map(async (prompt, batchIndex) => {
         const globalIndex = batchStart + batchIndex;
-        const result = await generateSingleImage(prompt, globalIndex, abortControllerRef.current?.signal);
+        // Use the ID from the initialized image object to ensure stability
+        const currentId = imagesRef.current[globalIndex].id;
+        const result = await generateSingleImage(prompt, globalIndex, currentId, abortControllerRef.current?.signal);
         
         // Update immediately when this individual image completes
         const idx = result.index - 1;

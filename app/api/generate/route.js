@@ -1,5 +1,5 @@
 const API_URL = 'https://yousmind.com/api/image-generator/generate';
-const BEARER_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib29raGVhZGVyMDA3QGdtYWlsLmNvbSIsImV4cCI6MTc2ODM2Mzk5MH0.k8nebYLk0Qxa97mCmgUAiRbLxFo18Wx8hH2eCRk7zV8';
+const BEARER_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib29raGVhZGVyMDA3QGdtYWlsLmNvbSIsImV4cCI6MTc2OTA3NTA3Mn0.fMcByDgqS4bM-VwWCVxNnZhxJ5KV7MTdFDMxB1KJ3oA';
 const BASE_URL = 'https://yousmind.com';
 
 export async function POST(request) {
@@ -22,6 +22,8 @@ export async function POST(request) {
         provider,
         n,
       }),
+      duplex: 'half',
+      signal: AbortSignal.timeout(300000), // 300 second timeout
     });
 
     if (!response.ok) {
