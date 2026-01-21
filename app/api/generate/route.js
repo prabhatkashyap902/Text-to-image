@@ -10,21 +10,43 @@ export async function POST(request) {
       return Response.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BEARER_TOKEN}`,
-      },
-      body: JSON.stringify({
-        prompt: prompt.trim(),
-        aspect_ratio,
-        provider,
-        n,
-      }),
-      duplex: 'half',
-      signal: AbortSignal.timeout(300000), // 300 second timeout
-    });
+    let response;
+    let attempts = 0;
+    const maxAttempts = 3;
+
+    while (attempts < maxAttempts) {
+      try {
+        response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${BEARER_TOKEN}`,
+          },
+          body: JSON.stringify({
+            prompt: prompt.trim(),
+            aspect_ratio,
+            provider,
+            n,
+          }),
+          duplex: 'half',
+          signal: AbortSignal.timeout(300000), // 300 second timeout
+        });
+        
+        // If request was successful or we got a response, break the loop
+        // We only retry on network errors (thrown exceptions)
+        break;
+      } catch (error) {
+        attempts++;
+        console.error(`Attempt ${attempts} failed:`, error.message);
+        
+        if (attempts === maxAttempts) {
+          throw error;
+        }
+        
+        // Wait 1 second before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

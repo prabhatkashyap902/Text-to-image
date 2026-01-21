@@ -196,15 +196,11 @@ export default function Home() {
       let downloadedCount = 0;
       let failedCount = 0;
 
-      // Download ONE image at a time with 10 second timeout
+      // Download ONE image at a time - wait indefinitely for each download (no timeout)
       for (const img of successfulImages) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
         try {
           const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-          const response = await fetch(proxyUrl, { signal: controller.signal });
-          clearTimeout(timeoutId);
+          const response = await fetch(proxyUrl);
           
           if (response.ok) {
             const blob = await response.blob();
@@ -212,17 +208,59 @@ export default function Home() {
               folder.file(`image${formatNumber(img.index)}.png`, blob);
               downloadedCount++;
             } else {
-              console.log(`Skipping image ${img.index} - empty blob`);
-              failedCount++;
+              console.log(`Image ${img.index} - empty blob, retrying...`);
+              // Retry once if empty blob
+              const retryResponse = await fetch(proxyUrl);
+              if (retryResponse.ok) {
+                const retryBlob = await retryResponse.blob();
+                if (retryBlob.size > 0) {
+                  folder.file(`image${formatNumber(img.index)}.png`, retryBlob);
+                  downloadedCount++;
+                } else {
+                  console.log(`Image ${img.index} - still empty after retry`);
+                  failedCount++;
+                }
+              } else {
+                failedCount++;
+              }
             }
           } else {
-            console.log(`Skipping image ${img.index} - status ${response.status}`);
-            failedCount++;
+            console.log(`Image ${img.index} - status ${response.status}, retrying...`);
+            // Retry once on failure
+            const retryResponse = await fetch(proxyUrl);
+            if (retryResponse.ok) {
+              const blob = await retryResponse.blob();
+              if (blob.size > 0) {
+                folder.file(`image${formatNumber(img.index)}.png`, blob);
+                downloadedCount++;
+              } else {
+                failedCount++;
+              }
+            } else {
+              failedCount++;
+            }
           }
         } catch (error) {
-          clearTimeout(timeoutId);
-          console.log(`Skipping image ${img.index} - ${error.name === 'AbortError' ? 'timeout' : error.message}`);
-          failedCount++;
+          console.log(`Image ${img.index} - error: ${error.message}, retrying...`);
+          // Retry once on error
+          try {
+            const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
+            const retryResponse = await fetch(proxyUrl);
+            if (retryResponse.ok) {
+              const blob = await retryResponse.blob();
+              if (blob.size > 0) {
+                folder.file(`image${formatNumber(img.index)}.png`, blob);
+                downloadedCount++;
+              } else {
+                failedCount++;
+              }
+            } else {
+              failedCount++;
+            }
+          } catch (retryError) {
+            console.log(`Image ${img.index} - retry also failed: ${retryError.message}`);
+            failedCount++;
+          }
         }
         
         setDownloadProgress({ current: downloadedCount + failedCount, total: successfulImages.length });
