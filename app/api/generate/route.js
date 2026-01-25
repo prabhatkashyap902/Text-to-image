@@ -1,5 +1,5 @@
 const API_URL = 'https://yousmind.com/api/image-generator/generate';
-const BEARER_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib29raGVhZGVyMDA3QGdtYWlsLmNvbSIsImV4cCI6MTc2OTA3NTA3Mn0.fMcByDgqS4bM-VwWCVxNnZhxJ5KV7MTdFDMxB1KJ3oA';
+const BEARER_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMHAxNGVkMDA3OEBnbWFpbC5jb20iLCJleHAiOjE3Njk3NDUwODJ9.kY0V7KgO6Uo3kPVR9NvyCNc7KPapbXMjpYCjY47LypE';
 const BASE_URL = 'https://yousmind.com';
 
 export async function POST(request) {

@@ -196,74 +196,80 @@ export default function Home() {
       let downloadedCount = 0;
       let failedCount = 0;
 
-      // Download ONE image at a time - wait indefinitely for each download (no timeout)
-      for (const img of successfulImages) {
-        try {
-          const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-          const response = await fetch(proxyUrl);
-          
-          if (response.ok) {
-            const blob = await response.blob();
-            if (blob.size > 0) {
-              folder.file(`image${formatNumber(img.index)}.png`, blob);
-              downloadedCount++;
+      // Download images in parallel batches of 50
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < successfulImages.length; i += BATCH_SIZE) {
+        const batch = successfulImages.slice(i, i + BATCH_SIZE);
+        
+        await Promise.all(batch.map(async (img) => {
+          try {
+            const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
+            const response = await fetch(proxyUrl);
+            
+            if (response.ok) {
+              const blob = await response.blob();
+              if (blob.size > 0) {
+                folder.file(`image${formatNumber(img.index)}.png`, blob);
+                downloadedCount++;
+              } else {
+                console.log(`Image ${img.index} - empty blob, retrying...`);
+                // Retry once if empty blob
+                const retryResponse = await fetch(proxyUrl);
+                if (retryResponse.ok) {
+                  const retryBlob = await retryResponse.blob();
+                  if (retryBlob.size > 0) {
+                    folder.file(`image${formatNumber(img.index)}.png`, retryBlob);
+                    downloadedCount++;
+                  } else {
+                    console.log(`Image ${img.index} - still empty after retry`);
+                    failedCount++;
+                  }
+                } else {
+                  failedCount++;
+                }
+              }
             } else {
-              console.log(`Image ${img.index} - empty blob, retrying...`);
-              // Retry once if empty blob
+              console.log(`Image ${img.index} - status ${response.status}, retrying...`);
+              // Retry once on failure
               const retryResponse = await fetch(proxyUrl);
               if (retryResponse.ok) {
-                const retryBlob = await retryResponse.blob();
-                if (retryBlob.size > 0) {
-                  folder.file(`image${formatNumber(img.index)}.png`, retryBlob);
+                const blob = await retryResponse.blob();
+                if (blob.size > 0) {
+                  folder.file(`image${formatNumber(img.index)}.png`, blob);
                   downloadedCount++;
                 } else {
-                  console.log(`Image ${img.index} - still empty after retry`);
                   failedCount++;
                 }
               } else {
                 failedCount++;
               }
             }
-          } else {
-            console.log(`Image ${img.index} - status ${response.status}, retrying...`);
-            // Retry once on failure
-            const retryResponse = await fetch(proxyUrl);
-            if (retryResponse.ok) {
-              const blob = await retryResponse.blob();
-              if (blob.size > 0) {
-                folder.file(`image${formatNumber(img.index)}.png`, blob);
-                downloadedCount++;
+          } catch (error) {
+            console.log(`Image ${img.index} - error: ${error.message}, retrying...`);
+            // Retry once on error
+            try {
+              const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
+              const retryResponse = await fetch(proxyUrl);
+              if (retryResponse.ok) {
+                const blob = await retryResponse.blob();
+                if (blob.size > 0) {
+                  folder.file(`image${formatNumber(img.index)}.png`, blob);
+                  downloadedCount++;
+                } else {
+                  failedCount++;
+                }
               } else {
                 failedCount++;
               }
-            } else {
+            } catch (retryError) {
+              console.log(`Image ${img.index} - retry also failed: ${retryError.message}`);
               failedCount++;
             }
           }
-        } catch (error) {
-          console.log(`Image ${img.index} - error: ${error.message}, retrying...`);
-          // Retry once on error
-          try {
-            const proxyUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
-            const retryResponse = await fetch(proxyUrl);
-            if (retryResponse.ok) {
-              const blob = await retryResponse.blob();
-              if (blob.size > 0) {
-                folder.file(`image${formatNumber(img.index)}.png`, blob);
-                downloadedCount++;
-              } else {
-                failedCount++;
-              }
-            } else {
-              failedCount++;
-            }
-          } catch (retryError) {
-            console.log(`Image ${img.index} - retry also failed: ${retryError.message}`);
-            failedCount++;
-          }
-        }
-        
-        setDownloadProgress({ current: downloadedCount + failedCount, total: successfulImages.length });
+          
+          // Update progress safely
+          setDownloadProgress(prev => ({ ...prev, current: downloadedCount + failedCount }));
+        }));
       }
 
       // Always create ZIP with whatever we got
